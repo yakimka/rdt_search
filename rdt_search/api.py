@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/v1", tags=["api"])
 
 @lru_cache(maxsize=1)
 def get_db():
-    return db.get_cursor("../data/radiot.db")
+    return db.get_cursor("./data/radiot.db")
 
 
 class Finder:

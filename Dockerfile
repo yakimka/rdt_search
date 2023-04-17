@@ -8,9 +8,9 @@ RUN addgroup --gid 1000 --system app \
     && mkdir /app \
     && chown -R 1000:1000 /app
 
-COPY --chown=app:app ./rdt_search /app
+COPY --chown=app:app ./rdt_search /app/rdt_search
 USER app
+RUN mkdir /app/data
 WORKDIR /app
-RUN mkdir /data && chown -R 1000:1000 /data
 
-CMD ["uvicorn", "main:app", "--host=0.0.0.0", "--port=8000"]
+CMD ["uvicorn", "rdt_search.api:app", "--host=0.0.0.0", "--port=8000"]
