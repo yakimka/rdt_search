@@ -1,4 +1,3 @@
-import re
 import time
 from enum import Enum
 from functools import cached_property, lru_cache
@@ -36,13 +35,18 @@ class Finder:
     def last_episode(self):
         return self._db.execute(f"SELECT MAX(episode_number) FROM {self.INDEX_NAME}").fetchone()[0]
 
-    def search(self, q: str, exact: bool, order_by: OrderBy, limit: int = 30):
+    def search(
+        self, q: str, episode_number: int | None, exact: bool, order_by: OrderBy, limit: int = 100
+    ):
         match = "?" if exact else "? || '*'"
+        episode_condition = ""
+        if episode_number is not None:
+            episode_condition = f" AND episode_number = {int(episode_number)}"
         return list(
             self._db.execute(
                 (
-                    f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH {match} ORDER BY"
-                    f" {order_by.to_sql()} LIMIT ?"
+                    f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH"
+                    f" {match}{episode_condition} ORDER BY {order_by.to_sql()}, start_time LIMIT ?"
                 ),
                 (db.escape_fts(q), limit),
             ).fetchall()
@@ -50,7 +54,7 @@ class Finder:
 
 
 @lru_cache(maxsize=1)
-def get_finder(db=Depends(get_db)):
+def get_finder(db=Depends(get_db)) -> Finder:
     return Finder(db)
 
 
@@ -88,11 +92,12 @@ def _miliseconds_to_time(miliseconds):
 @router.get("/search", response_model=list[SearchResult])
 def search(
     q: str = Query(..., example="бобок", description="Search query"),
+    episode_number: int = Query(None, description="Episode number to search in"),
     exact: bool = Query(False, description="Search by exact match or not"),
     order_by: Finder.OrderBy = Finder.OrderBy.RANK_ASC,
     finder=Depends(get_finder),
 ):
-    result = finder.search(q, exact=exact, order_by=order_by)
+    result = finder.search(q, episode_number=episode_number, exact=exact, order_by=order_by)
     return [SearchResult.from_db_row(row) for row in result]
 
 
