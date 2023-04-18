@@ -15,6 +15,17 @@ def get_db():
     return db.get_cursor("./data/radiot.db")
 
 
+class SyntaxError(Exception):
+    def __init__(self, message):
+        self.message = message
+        super().__init__(message)
+
+    @classmethod
+    def from_operational_error(cls, error: str):
+        message = error.replace("fts5:", "").strip()
+        return cls(message)
+
+
 class Finder:
     INDEX_NAME = "radiot_search"
 
@@ -35,22 +46,23 @@ class Finder:
     def last_episode(self):
         return self._db.execute(f"SELECT MAX(episode_number) FROM {self.INDEX_NAME}").fetchone()[0]
 
-    def search(
-        self, q: str, episode_number: int | None, exact: bool, order_by: OrderBy, limit: int = 100
-    ):
-        match = "?" if exact else "? || '*'"
+    def search(self, q: str, episode_number: int | None, order_by: OrderBy, limit: int = 100):
         episode_condition = ""
         if episode_number is not None:
             episode_condition = f" AND episode_number = {int(episode_number)}"
-        return list(
-            self._db.execute(
+        try:
+            result = self._db.execute(
                 (
-                    f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH"
-                    f" {match}{episode_condition} ORDER BY {order_by.to_sql()}, start_time LIMIT ?"
+                    f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH ?"
+                    f"{episode_condition} ORDER BY {order_by.to_sql()}, start_time LIMIT ?"
                 ),
-                (db.escape_fts(q), limit),
+                (q, limit),
             ).fetchall()
-        )
+        except db.sqlite3.OperationalError as e:
+            if "syntax error" in e.args[0]:
+                raise SyntaxError.from_operational_error(e.args[0])
+            raise
+        return list(result)
 
 
 @lru_cache(maxsize=1)
@@ -75,7 +87,7 @@ class SearchResult(BaseModel):
 
     @classmethod
     def from_db_row(cls, row):
-        ep, start, end, text = row
+        text, ep, start, end = row
         return cls(
             episode_number=ep,
             start_time=_miliseconds_to_time(start),
@@ -91,13 +103,16 @@ def _miliseconds_to_time(miliseconds):
 
 @router.get("/search", response_model=list[SearchResult])
 def search(
-    q: str = Query(..., example="бобок", description="Search query"),
+    q: str = Query(
+        ...,
+        example="бобок",
+        description="FTS5 query. See https://www.sqlite.org/fts5.html#full_text_query_syntax",
+    ),
     episode_number: int = Query(None, description="Episode number to search in"),
-    exact: bool = Query(False, description="Search by exact match or not"),
     order_by: Finder.OrderBy = Finder.OrderBy.RANK_ASC,
     finder=Depends(get_finder),
 ):
-    result = finder.search(q, episode_number=episode_number, exact=exact, order_by=order_by)
+    result = finder.search(q, episode_number=episode_number, order_by=order_by)
     return [SearchResult.from_db_row(row) for row in result]
 
 
