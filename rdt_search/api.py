@@ -1,9 +1,10 @@
+import re
 import time
-from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property, lru_cache
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, Query
+from pydantic import BaseModel, Field
 
 from rdt_search import db
 
@@ -36,13 +37,28 @@ class Finder:
     def last_episode(self):
         return self._db.execute(f"SELECT MAX(episode_number) FROM {self.INDEX_NAME}").fetchone()[0]
 
-    def search(self, q: str, order_by: OrderBy, limit: int = 30):
+    def search(self, q: str, exact: bool, order_by: OrderBy, limit: int = 30):
+        match = "?" if exact else "? || '*'"
         return list(
             self._db.execute(
-                f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH ? ORDER BY {order_by.to_sql()} LIMIT ?",
-                (db.escape_fts(q), limit),
+                (
+                    f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH {match} ORDER BY"
+                    f" {order_by.to_sql()} LIMIT ?"
+                ),
+                # (db.escape_fts(q), limit),
+                (_prepare_query(q), limit),
             ).fetchall()
-            )
+        )
+
+
+_remove_chars = re.compile(r"[^а-яa-z0-9*]")
+
+
+def _prepare_query(q: str):
+    res = re.sub(_remove_chars, "", q.lower())
+    if not res:
+        res = '""'
+    return res
 
 
 @lru_cache(maxsize=1)
@@ -51,17 +67,20 @@ def get_finder(db=Depends(get_db)):
     return Finder(db)
 
 
-@router.get("/")
+class Stats(BaseModel):
+    last_episode: int = Field(..., example=850, description="Last episode number in database")
+
+
+@router.get("/", response_model=Stats)
 def root(finder=Depends(get_finder)):
     return {"last_episode": finder.last_episode}
 
 
-@dataclass
-class SearchResult:
-    episode_number: int
-    start_time: str
-    end_time: str
-    text: str
+class SearchResult(BaseModel):
+    episode_number: int = Field(..., example=649, description="Episode number")
+    start_time: str = Field(..., example="00:00:00", description="Start time of the fragment")
+    end_time: str = Field(..., example="00:01:22", description="End time of the fragment")
+    text: str = Field(..., example="кто-то опять щелкает", description="Text of the fragment")
 
     @classmethod
     def from_db_row(cls, row):
@@ -80,8 +99,13 @@ def _miliseconds_to_time(miliseconds):
 
 
 @router.get("/search", response_model=list[SearchResult])
-def search(q: str, order_by: Finder.OrderBy, finder=Depends(get_finder)):
-    result = finder.search(q, order_by=order_by)
+def search(
+    q: str = Query(..., example="боб*к", description="Search query. You can use * as wildcard"),
+    exact: bool = Query(False, description="Search by exact match"),
+    order_by: Finder.OrderBy = Finder.OrderBy.RANK_ASC,
+    finder=Depends(get_finder),
+):
+    result = finder.search(q, exact=exact, order_by=order_by)
     return [SearchResult.from_db_row(row) for row in result]
 
 

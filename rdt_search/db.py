@@ -10,11 +10,9 @@ def get_cursor(db_file: str) -> sqlite3.Cursor:
 
 
 def create_index(cursor: sqlite3.Cursor) -> None:
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS radiot_search USING fts5(episode_number, start_time, end_time, text);
-        """
-    )
+        """)
 
 
 class Row(NamedTuple):
@@ -44,7 +42,7 @@ def stream_data(data: Iterable) -> Generator[Row, None, None]:
 
 def _parse_row(row: list[str]) -> Row:
     file_name, start, end, text = row
-    episode_number = file_name.replace('rt_podcast', '').replace('.tsv', '')
+    episode_number = file_name.replace("rt_podcast", "").replace(".tsv", "")
     return Row(
         episode_number=int(episode_number),
         start_time=int(start),
@@ -63,6 +61,4 @@ def escape_fts(query):
         query += '"'
     bits = _escape_fts_re.split(query)
     bits = [b for b in bits if b and b != '""']
-    return " ".join(
-        '"{}"'.format(bit) if not bit.startswith('"') else bit for bit in bits
-    )
+    return " ".join('"{}"'.format(bit) if not bit.startswith('"') else bit for bit in bits)
