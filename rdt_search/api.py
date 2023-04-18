@@ -27,7 +27,6 @@ class Finder:
 
         def to_sql(self):
             col, order = self.value.rsplit("_", maxsplit=1)
-            print(f"{col} {order.upper()}")
             return f"{col} {order.upper()}"
 
     def __init__(self, db):
@@ -45,25 +44,13 @@ class Finder:
                     f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH {match} ORDER BY"
                     f" {order_by.to_sql()} LIMIT ?"
                 ),
-                # (db.escape_fts(q), limit),
-                (_prepare_query(q), limit),
+                (db.escape_fts(q), limit),
             ).fetchall()
         )
 
 
-_remove_chars = re.compile(r"[^а-яa-z0-9*]")
-
-
-def _prepare_query(q: str):
-    res = re.sub(_remove_chars, "", q.lower())
-    if not res:
-        res = '""'
-    return res
-
-
 @lru_cache(maxsize=1)
 def get_finder(db=Depends(get_db)):
-    print("Creating finder")
     return Finder(db)
 
 
@@ -100,8 +87,8 @@ def _miliseconds_to_time(miliseconds):
 
 @router.get("/search", response_model=list[SearchResult])
 def search(
-    q: str = Query(..., example="боб*к", description="Search query. You can use * as wildcard"),
-    exact: bool = Query(False, description="Search by exact match"),
+    q: str = Query(..., example="бобок", description="Search query"),
+    exact: bool = Query(False, description="Search by exact match or not"),
     order_by: Finder.OrderBy = Finder.OrderBy.RANK_ASC,
     finder=Depends(get_finder),
 ):
