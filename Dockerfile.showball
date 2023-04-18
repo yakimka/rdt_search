@@ -1,0 +1,8 @@
+FROM python:3.11 as builder
+
+RUN mkdir -p /build
+WORKDIR /build
+RUN git clone --recursive https://github.com/abiliojr/fts5-snowball.git
+WORKDIR /build/fts5-snowball
+
+RUN make

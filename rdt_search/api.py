@@ -1,11 +1,10 @@
-import time
-from dataclasses import dataclass
-from enum import Enum
-from functools import cached_property, lru_cache
+import sqlite3
+from functools import lru_cache
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
+from pydantic import BaseModel, Field
 
-from rdt_search import db
+from rdt_search import db, queries
 
 router = APIRouter(prefix="/api/v1", tags=["api"])
 
@@ -15,74 +14,68 @@ def get_db():
     return db.get_cursor("./data/radiot.db")
 
 
-class Finder:
-    INDEX_NAME = "radiot_search"
-
-    class OrderBy(str, Enum):
-        RANK_ASC = "rank_asc"
-        RANK_DESC = "rank_desc"
-        EPISODE_NUMBER_ASC = "episode_number_asc"
-        EPISODE_NUMBER_DESC = "episode_number_desc"
-
-        def to_sql(self):
-            col, order = self.value.rsplit("_", maxsplit=1)
-            print(f"{col} {order.upper()}")
-            return f"{col} {order.upper()}"
-
-    def __init__(self, db):
-        self._db = db
-
-    @cached_property
-    def last_episode(self):
-        return self._db.execute(f"SELECT MAX(episode_number) FROM {self.INDEX_NAME}").fetchone()[0]
-
-    def search(self, q: str, order_by: OrderBy, limit: int = 30):
-        return list(
-            self._db.execute(
-                f"SELECT * FROM {self.INDEX_NAME} WHERE text MATCH ? ORDER BY {order_by.to_sql()} LIMIT ?",
-                (db.escape_fts(q), limit),
-            ).fetchall()
-            )
-
-
 @lru_cache(maxsize=1)
-def get_finder(db=Depends(get_db)):
-    print("Creating finder")
-    return Finder(db)
+def get_last_episode(db=Depends(get_db)) -> int:
+    return queries.LastEpisode(db).execute()
 
 
-@router.get("/")
-def root(finder=Depends(get_finder)):
-    return {"last_episode": finder.last_episode}
+class Stats(BaseModel):
+    last_episode: int = Field(..., example=850, description="Last episode number in database")
 
 
-@dataclass
-class SearchResult:
-    episode_number: int
-    start_time: str
-    end_time: str
-    text: str
-
-    @classmethod
-    def from_db_row(cls, row):
-        ep, start, end, text = row
-        return cls(
-            episode_number=ep,
-            start_time=_miliseconds_to_time(start),
-            end_time=_miliseconds_to_time(end),
-            text=text,
-        )
+@router.get("/", response_model=Stats)
+def root(last_episode: int = Depends(get_last_episode)):
+    return Stats(last_episode=last_episode)
 
 
-def _miliseconds_to_time(miliseconds):
-    seconds = miliseconds / 1000
-    return time.strftime("%H:%M:%S", time.gmtime(seconds))
+class SearchResult(BaseModel):
+    episode_number: int = Field(..., example=649, description="Episode number")
+    start_time: str = Field(..., example="00:00:00", description="Start time of the fragment")
+    end_time: str = Field(..., example="00:01:22", description="End time of the fragment")
+    text: str = Field(..., example="кто-то опять щелкает", description="Text of the fragment")
+    link: str = Field(
+        ...,
+        example=queries.link_to_fragment_start(853, 60),
+        description="Link to the fragment start",
+    )
 
 
 @router.get("/search", response_model=list[SearchResult])
-def search(q: str, order_by: Finder.OrderBy, finder=Depends(get_finder)):
-    result = finder.search(q, order_by=order_by)
-    return [SearchResult.from_db_row(row) for row in result]
+def search(
+    q: str = Query(
+        ...,
+        example="бобок",
+        description="FTS5 query. See https://www.sqlite.org/fts5.html#full_text_query_syntax",
+    ),
+    episode_number: int = Query(None, description="Episode number to search in"),
+    order_by: queries.Search.OrderBy = queries.Search.OrderBy.RANK_ASC,
+    db: sqlite3.Cursor = Depends(get_db),
+):
+    query = queries.Search(db)
+    try:
+        result = query.execute(q, episode_number=episode_number, order_by=order_by)
+    except queries.SyntaxError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "loc": ["query", "q"],
+                "msg": e.message,
+                "type": "value_error",
+            },
+        )
+
+    return [
+        SearchResult(
+            episode_number=item.episode_number,
+            start_time=item.start_time.humanized,
+            end_time=item.end_time.humanized,
+            text=item.text,
+            link=queries.link_to_fragment_start(
+                episode_number=item.episode_number, seconds=item.start_time.seconds
+            ),
+        )
+        for item in result
+    ]
 
 
 app = FastAPI()

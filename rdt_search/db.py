@@ -6,15 +6,18 @@ from typing import Generator, Iterable, NamedTuple
 
 def get_cursor(db_file: str) -> sqlite3.Cursor:
     conn = sqlite3.connect(db_file)
+    conn.enable_load_extension(True)
+    # https://github.com/abiliojr/fts5-snowball
+    conn.load_extension("rdt_search/lib/fts5stemmer")
     return conn.cursor()
 
 
 def create_index(cursor: sqlite3.Cursor) -> None:
-    cursor.execute(
-        """
-        CREATE VIRTUAL TABLE IF NOT EXISTS radiot_search USING fts5(episode_number, start_time, end_time, text);
-        """
-    )
+    cursor.execute("""
+        CREATE VIRTUAL TABLE
+        radiot_search USING
+        fts5(text, episode_number, start_time, end_time, tokenize = 'snowball russian english');
+        """)
 
 
 class Row(NamedTuple):
@@ -44,12 +47,12 @@ def stream_data(data: Iterable) -> Generator[Row, None, None]:
 
 def _parse_row(row: list[str]) -> Row:
     file_name, start, end, text = row
-    episode_number = file_name.replace('rt_podcast', '').replace('.tsv', '')
+    episode_number = file_name.replace("rt_podcast", "").replace(".tsv", "")
     return Row(
+        text=text.lower(),
         episode_number=int(episode_number),
         start_time=int(start),
         end_time=int(end),
-        text=text.lower(),
     )
 
 
@@ -63,6 +66,7 @@ def escape_fts(query):
         query += '"'
     bits = _escape_fts_re.split(query)
     bits = [b for b in bits if b and b != '""']
-    return " ".join(
-        '"{}"'.format(bit) if not bit.startswith('"') else bit for bit in bits
-    )
+    result = " ".join('"{}"'.format(bit) if not bit.startswith('"') else bit for bit in bits)
+    print("query")
+    print(result)
+    return result
